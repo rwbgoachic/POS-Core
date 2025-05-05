@@ -1,18 +1,13 @@
 import { Product, Transaction } from '../types/pos.types';
 
-class OfflineManager {
+export class OfflineManager {
   private static instance: OfflineManager;
-  private readonly PRODUCTS_KEY = 'pos_products';
-  private readonly TRANSACTIONS_KEY = 'pos_transactions';
+  private db: IDBDatabase | null = null;
+  private readonly DB_NAME = 'pos_store';
+  private readonly DB_VERSION = 1;
 
   private constructor() {
-    // Initialize storage if needed
-    if (!localStorage.getItem(this.PRODUCTS_KEY)) {
-      localStorage.setItem(this.PRODUCTS_KEY, JSON.stringify([]));
-    }
-    if (!localStorage.getItem(this.TRANSACTIONS_KEY)) {
-      localStorage.setItem(this.TRANSACTIONS_KEY, JSON.stringify([]));
-    }
+    this.initDB();
   }
 
   public static getInstance(): OfflineManager {
@@ -22,45 +17,107 @@ class OfflineManager {
     return OfflineManager.instance;
   }
 
+  private initDB(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
+
+      request.onerror = () => reject(request.error);
+
+      request.onsuccess = () => {
+        this.db = request.result;
+        resolve();
+      };
+
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        
+        if (!db.objectStoreNames.contains('products')) {
+          db.createObjectStore('products', { keyPath: 'id' });
+        }
+        
+        if (!db.objectStoreNames.contains('transactions')) {
+          db.createObjectStore('transactions', { keyPath: 'id' });
+        }
+      };
+    });
+  }
+
+  private async ensureDBConnection(): Promise<void> {
+    if (!this.db) {
+      await this.initDB();
+    }
+  }
+
   // Product Management
   async getProducts(): Promise<Product[]> {
-    const products = localStorage.getItem(this.PRODUCTS_KEY);
-    return products ? JSON.parse(products) : [];
+    await this.ensureDBConnection();
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(['products'], 'readonly');
+      const store = transaction.objectStore('products');
+      const request = store.getAll();
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
   }
 
   async saveProduct(product: Product): Promise<void> {
-    const products = await this.getProducts();
-    const existingIndex = products.findIndex(p => p.id === product.id);
-    
-    if (existingIndex >= 0) {
-      products[existingIndex] = product;
-    } else {
-      products.push(product);
-    }
+    await this.ensureDBConnection();
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(['products'], 'readwrite');
+      const store = transaction.objectStore('products');
+      const request = store.put(product);
 
-    localStorage.setItem(this.PRODUCTS_KEY, JSON.stringify(products));
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   // Transaction Management
   async getTransactions(): Promise<Transaction[]> {
-    const transactions = localStorage.getItem(this.TRANSACTIONS_KEY);
-    return transactions ? JSON.parse(transactions) : [];
+    await this.ensureDBConnection();
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(['transactions'], 'readonly');
+      const store = transaction.objectStore('transactions');
+      const request = store.getAll();
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
   }
 
   async saveTransaction(transaction: Transaction): Promise<void> {
-    const transactions = await this.getTransactions();
-    transactions.push(transaction);
-    localStorage.setItem(this.TRANSACTIONS_KEY, JSON.stringify(transactions));
+    await this.ensureDBConnection();
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(['transactions'], 'readwrite');
+      const store = transaction.objectStore('transactions');
+      const request = store.put(transaction);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
   }
 
   // Stock Management
   async updateStock(productId: string, quantity: number): Promise<void> {
-    const products = await this.getProducts();
-    const product = products.find(p => p.id === productId);
-    
-    if (product) {
-      product.stock += quantity;
-      await this.saveProduct(product);
-    }
+    await this.ensureDBConnection();
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction(['products'], 'readwrite');
+      const store = transaction.objectStore('products');
+      const request = store.get(productId);
+
+      request.onsuccess = () => {
+        const product = request.result;
+        if (product) {
+          product.stock += quantity;
+          const updateRequest = store.put(product);
+          updateRequest.onsuccess = () => resolve();
+          updateRequest.onerror = () => reject(updateRequest.error);
+        } else {
+          reject(new Error('Product not found'));
+        }
+      };
+      request.onerror = () => reject(request.error);
+    });
   }
 }
