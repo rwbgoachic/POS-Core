@@ -2,3 +2,8 @@
   background-color: #004C97;
   color: white;
 }
+
+[data-testid="nfc-pad"] {
+  background: #004C97;
+  color: white;
+}
